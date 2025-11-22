@@ -1,0 +1,97 @@
+#include <Arduino.h>
+
+#define MOTOR_PIN 26     // GPIO pin connected to transistor base
+
+#define SAMPLE_RATE 100  // Sampling rate in Hz
+#define NUM_SAMPLES 100  // Number of samples (1 second)
+
+const int freqMin = 6;
+const int freqMax = 12;
+const int freqCount = freqMax - freqMin + 1;
+
+float samples[NUM_SAMPLES];
+
+// Goertzel variables arrays for each freq
+int k[freqCount];
+float coeff[freqCount];
+float Q1[freqCount];
+float Q2[freqCount];
+
+unsigned long motorStartTime = 0;
+unsigned long motorDuration = 5000;  // Motor runs for 5 seconds
+bool motorOn = false;
+
+// Simulate tremor data at 8Hz for demonstration
+float simulateTremor(float freqHz, int sampleNum) {
+  float noise = random(-100, 100) / 1000.0;
+  return sin(2 * PI * freqHz * sampleNum / SAMPLE_RATE) + noise;
+}
+
+// Initialize Goertzel parameters for each frequency
+void goertzelInit() {
+  for (int i = 0; i < freqCount; i++) {
+    int targetFreq = freqMin + i;
+    k[i] = (int)(0.5 + ((NUM_SAMPLES * targetFreq) / SAMPLE_RATE));
+    float omega = (2.0 * PI * k[i]) / NUM_SAMPLES;
+    coeff[i] = 2.0 * cos(omega);
+    Q1[i] = 0;
+    Q2[i] = 0;
+  }
+}
+
+// Process Goertzel for a given freq index and data, return power
+float goertzelProcess(float* data, int freqIndex) {
+  Q1[freqIndex] = 0;
+  Q2[freqIndex] = 0;
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    float Q0 = coeff[freqIndex] * Q1[freqIndex] - Q2[freqIndex] + data[i];
+    Q2[freqIndex] = Q1[freqIndex];
+    Q1[freqIndex] = Q0;
+  }
+  float power = Q1[freqIndex] * Q1[freqIndex] + Q2[freqIndex] * Q2[freqIndex] - coeff[freqIndex] * Q1[freqIndex] * Q2[freqIndex];
+  return power;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(MOTOR_PIN, OUTPUT);
+  digitalWrite(MOTOR_PIN, LOW);
+  goertzelInit();
+}
+
+void loop() {
+  // Simulate samples for 8Hz tremor (replace with actual sensor read)
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    samples[i] = simulateTremor(8.0, i);
+    delay(1000 / SAMPLE_RATE);
+  }
+
+  bool tremorDetected = false;
+  for (int i = 0; i < freqCount; i++) {
+    float power = goertzelProcess(samples, i);
+    Serial.print("Power at ");
+    Serial.print(freqMin + i);
+    Serial.print(" Hz: ");
+    Serial.println(power);
+
+    if (power > 20.0) {  // Threshold, adjust as needed
+      tremorDetected = true;
+    }
+  }
+
+  if (tremorDetected && !motorOn) {
+    motorOn = true;
+    motorStartTime = millis();
+    digitalWrite(MOTOR_PIN, HIGH);
+    Serial.println("Tremor Detected! Motor vibrating...");
+  }
+
+  if (motorOn) {
+    Serial.println("Tremor Detected!");
+    if (millis() - motorStartTime >= motorDuration) {
+      motorOn = false;
+      digitalWrite(MOTOR_PIN, LOW);
+      Serial.println("Motor stopped.");
+    }
+  }
+}
